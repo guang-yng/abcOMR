@@ -1,0 +1,10 @@
+tokenizers/
+weights
+
+outputs
+
+__pycache__
+*.pyc
+*.pt
+*.out
+*.sh
