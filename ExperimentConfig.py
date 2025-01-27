@@ -38,6 +38,7 @@ class Data:
     num_workers: int
     tokenization_mode: str
     reduce_ratio: float
+    tokenizer_path: str
 
     @staticmethod
     def from_dict(obj: Any) -> 'Data':
@@ -48,7 +49,8 @@ class Data:
         num_workers = from_int(obj.get("num_workers"))
         tokenization_mode = from_str(obj.get("tokenization_mode"))
         reduce_ratio = from_float(obj.get("reduce_ratio"))
-        return Data(data_path, batch_size, vocab_name, num_workers, tokenization_mode, reduce_ratio)
+        tokenizer_path = from_str(obj.get("tokenizer_path"))
+        return Data(data_path, batch_size, vocab_name, num_workers, tokenization_mode, reduce_ratio, tokenizer_path)
 
     def to_dict(self) -> dict:
         result: dict = {}
@@ -58,6 +60,7 @@ class Data:
         result["num_workers"] = from_int(self.num_workers)
         result["tokenization_mode"] = from_str(self.tokenization_mode)
         result["reduce_ratio"] = to_float(self.reduce_ratio)
+        result["tokenizer_path"] = from_str(self.tokenizer_path)
         return result
 
 

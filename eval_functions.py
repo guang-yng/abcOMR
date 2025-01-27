@@ -43,6 +43,25 @@ def parse_krn_content(krn, ler_parsing=False, cer_parsing=False):
         krn = krn.replace("\t", " <t> ")
         return krn.split(" ")
 
+import re
+def parse_abc_content(abc, ler_parsing=False, cer_parsing=False):
+    assert not (ler_parsing and cer_parsing)
+    if cer_parsing:
+        characters = []
+        for token in re.split(r'(<\|text\|>)', ''.join(abc)):
+            if token not in ['<|text|>']:
+                for char in token:
+                    characters.append(char)
+            else:
+                characters.append(token)
+        return characters
+    if ler_parsing:
+        abc_lines = ''.join(abc).split("\n")
+        return abc_lines
+    else:
+        return abc
+        
+
 def compute_metric(a1, a2):
     acc_ed_dist = 0
     acc_len = 0
@@ -52,6 +71,44 @@ def compute_metric(a1, a2):
         acc_len += len(g)
     
     return 100.*acc_ed_dist / acc_len
+    
+def compute_poliphony_metrics_abc(hyp_array, gt_array):
+    hyp_cer = []
+    gt_cer = []
+
+    hyp_ser = []
+    gt_ser = []
+
+    hyp_ler = []
+    gt_ler = []
+    
+    for h_tokens, gt_tokens in zip(hyp_array, gt_array):
+        hyp_ler.append(parse_abc_content(h_tokens, ler_parsing=True, cer_parsing=False))
+        gt_ler.append(parse_abc_content(gt_tokens, ler_parsing=True, cer_parsing=False))
+
+        hyp_ser.append(parse_abc_content(h_tokens, ler_parsing=False, cer_parsing=False))
+        gt_ser.append(parse_abc_content(gt_tokens, ler_parsing=False, cer_parsing=False))
+
+        hyp_cer.append(parse_abc_content(h_tokens, ler_parsing=False, cer_parsing=True))
+        gt_cer.append(parse_abc_content(gt_tokens, ler_parsing=False, cer_parsing=True))
+    
+    acc_ed_dist = 0
+    acc_len = 0
+
+    cer = 0
+    ser = 0
+    ler = 0
+
+    for (h, g) in zip(hyp_cer, gt_cer):
+        acc_ed_dist += levenshtein(h, g)
+        acc_len += len(g)
+    
+    cer = compute_metric(hyp_cer, gt_cer)
+    ser = compute_metric(hyp_ser, gt_ser)
+    ler = compute_metric(hyp_ler, gt_ler)
+
+    return cer, ser, ler
+
 
 def compute_poliphony_metrics(hyp_array, gt_array):
     hyp_cer = []

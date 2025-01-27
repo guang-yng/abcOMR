@@ -4,11 +4,13 @@ import random
 import numpy as np
 import torch.nn as nn
 import lightning.pytorch as L
+from transformers import GenerationConfig
 
 from torchinfo import summary
-from eval_functions import compute_poliphony_metrics
+from eval_functions import compute_poliphony_metrics_abc
 from smt_model.configuration_smt import SMTConfig
 from smt_model.modeling_smt import SMTModelForCausalLM
+from typing import Any, Dict, List, Union
 
 class SMTPP_Trainer(L.LightningModule):
     def __init__(self, maxh, maxw, maxlen, out_categories, padding_token, in_channels, w2i, i2w, d_model=256, dim_ff=256, num_dec_layers=8):
@@ -27,16 +29,16 @@ class SMTPP_Trainer(L.LightningModule):
         self.worst_image = None
         self.best_loss = np.inf
         self.best_image = None
-        
+
         summary(self, input_size=[(1,1,config.maxh,config.maxw), (1,config.maxlen)], 
                 dtypes=[torch.float, torch.long])
         
         self.save_hyperparameters()
     
     def configure_optimizers(self):
-        return torch.optim.Adam(list(self.model.encoder.parameters()) + list(self.model.decoder.parameters()), lr=1e-4, amsgrad=False)
+        return torch.optim.AdamW(list(self.model.encoder.parameters()) + list(self.model.decoder.parameters()), lr=1e-4, amsgrad=False, weight_decay=1e-5)
     
-    def forward(self, input, last_preds) -> torch.Any:
+    def forward(self, input, last_preds) -> Any:
         return self.model(input, last_preds)
     
     def training_step(self, batch):
@@ -56,8 +58,8 @@ class SMTPP_Trainer(L.LightningModule):
         return loss
     
     def on_train_epoch_end(self) -> None:
-        self.logger.experiment.log({"worst_training_loss": [wandb.Image(self.worst_image.squeeze(0).cpu().numpy())]})
-        self.logger.experiment.log({"best_training_loss": [wandb.Image(self.best_image.squeeze(0).cpu().numpy())]})
+        self.logger.experiment.log({"worst_training_loss": [wandb.Image(worst_image.cpu().numpy()) for worst_image in self.worst_image]})
+        self.logger.experiment.log({"best_training_loss": [wandb.Image(best_image.squeeze(0).cpu().numpy()) for best_image in self.best_image]})
         
         self.worst_loss = -1
         self.worst_image = None
@@ -67,29 +69,31 @@ class SMTPP_Trainer(L.LightningModule):
     
     def validation_step(self, val_batch):
         x, dec_in, y = val_batch
-        predicted_sequence, _ = self.model.predict(input=x)
+        predicted_sequences, _ = self.model.predict(input=x)
         
-        dec = "".join(predicted_sequence)
-        dec = dec.replace("<t>", "\t")
-        dec = dec.replace("<b>", "\n")
-        dec = dec.replace("<s>", " ")
+        # dec = "".join(predicted_sequence)
+        # dec = dec.replace("<t>", "\t")
+        # dec = dec.replace("<b>", "\n")
+        # dec = dec.replace("<s>", " ")
+        dec = [[token for token in predicted_sequence if token not in ['<|pad|>', '<|begin_of_abc|>', '<|end_of_abc|>']] for predicted_sequence in predicted_sequences]
 
-        gt = "".join([self.model.i2w[token.item()] for token in y.squeeze(0)[:-1]])
-        gt = gt.replace("<t>", "\t")
-        gt = gt.replace("<b>", "\n")
-        gt = gt.replace("<s>", " ")
+        # gt = "".join([self.model.i2w[token.item()] for token in y.squeeze(0)[:-1]])
+        # gt = gt.replace("<t>", "\t")
+        # gt = gt.replace("<b>", "\n")
+        # gt = gt.replace("<s>", " ")
+        gt = [[self.model.i2w[token.item()] for token in tokens if self.model.i2w[token.item()] not in ['<|pad|>', '<|begin_of_abc|>', '<|end_of_abc|>']] for tokens in y] 
 
-        self.preds.append(dec)
-        self.grtrs.append(gt)
+        self.preds.extend(dec)
+        self.grtrs.extend(gt)
         
     def on_validation_epoch_end(self, metric_name="val") -> None:
-        cer, ser, ler = compute_poliphony_metrics(self.preds, self.grtrs)
+        cer, ser, ler = compute_poliphony_metrics_abc(self.preds, self.grtrs)
         
         random_index = random.randint(0, len(self.preds)-1)
         predtoshow = self.preds[random_index]
         gttoshow = self.grtrs[random_index]
-        print(f"[Prediction] - {predtoshow}")
-        print(f"[GT] - {gttoshow}")
+        print(f"[Prediction] - {''.join(predtoshow)}")
+        print(f"[GT] - {''.join(gttoshow)}")
         
         self.log(f'{metric_name}_CER', cer, on_epoch=True, prog_bar=True)
         self.log(f'{metric_name}_SER', ser, on_epoch=True, prog_bar=True)
@@ -100,7 +104,7 @@ class SMTPP_Trainer(L.LightningModule):
         
         return ser
     
-    def test_step(self, test_batch) -> torch.Tensor | torch.Dict[str, torch.Any] | None:
+    def test_step(self, test_batch) -> Union[torch.Tensor, Dict[str, Any], None]:
         return self.validation_step(test_batch)
     
     def on_test_epoch_end(self) -> None:

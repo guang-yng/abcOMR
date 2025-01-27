@@ -9,8 +9,10 @@ from ExperimentConfig import ExperimentConfig
 from Generator.SynthGenerator import VerovioGenerator
 from data_augmentation.data_augmentation import augment, convert_img_to_tensor
 from utils.vocab_utils import check_and_retrieveVocabulary
+from tokenizers import Tokenizer
+from functools import partial
 
-from datasets import load_dataset
+from datasets import load_dataset, load_from_disk
 from torch.utils.data import Dataset
 from lightning.pytorch import LightningDataModule
 
@@ -50,17 +52,30 @@ def parse_kern_file(krn: str, tokenization_mode='bekern') -> str:
     
     return krn
 
-def load_from_files_list(file_ref:str, split:str="train", tokenization_mode='bekern', reduce_ratio=0.5) -> list:
-    dataset = load_dataset(file_ref, split=split)
+from tqdm import tqdm
+def load_from_files_list(file_ref:str, split:str="train", tokenization_mode='bekern', reduce_ratio=0.5, tokenizer=None) -> list:
+    if tokenization_mode == "abc":
+        dataset = load_from_disk(file_ref)[split]
+    else:
+        dataset = load_dataset(file_ref, split=split)
     x = []
     y = []
+    pbar = tqdm(total=len(dataset))
     for sample in dataset:
-        y.append(['<bos>'] + parse_kern_file(sample["transcription"], tokenization_mode=tokenization_mode) + ['<eos>'])
+        if tokenization_mode == "abc":
+            y.append(tokenizer.encode(sample["transcription"]).tokens)
+        else:
+            y.append(['<bos>'] + parse_kern_file(sample["transcription"], tokenization_mode=tokenization_mode) + ['<eos>'])
         img = img = np.array(sample['image'])
         width = int(np.ceil(img.shape[1] * reduce_ratio))
         height = int(np.ceil(img.shape[0] * reduce_ratio))
         img = cv2.resize(img, (width, height))
         x.append(img)
+        # if split == 'train' and len(x) > 16:
+        #     break
+        if split != 'train' and len(x) > 192:
+            break
+        pbar.update()
     return x, y
 
 def batch_preparation_img2seq(data):
@@ -80,7 +95,7 @@ def batch_preparation_img2seq(data):
     max_length_seq = max([len(w) for w in gt])
 
     decoder_input = torch.zeros(size=[len(dec_in),max_length_seq])
-    y = torch.zeros(size=[len(gt),max_length_seq])
+    y = torch.ones(size=[len(gt),max_length_seq]) * 4
 
     for i, seq in enumerate(dec_in):
         decoder_input[i, 0:len(seq)-1] = torch.from_numpy(np.asarray([char for char in seq[:-1]]))
@@ -128,7 +143,7 @@ class OMRIMG2SEQDataset(Dataset):
     def set_dictionaries(self, w2i, i2w):
         self.w2i = w2i
         self.i2w = i2w
-        self.padding_token = w2i['<pad>']
+        self.padding_token = w2i['<pad>'] if '<pad>' in w2i else w2i['<|pad|>']
     
     def get_dictionaries(self):
         return self.w2i, self.i2w
@@ -165,11 +180,11 @@ class SyntheticOMRDataset(OMRIMG2SEQDataset):
 
 class RealDataset(OMRIMG2SEQDataset):
     def __init__(self, data_path, split, teacher_forcing_perc=0.2, reduce_ratio=1.0, 
-                augment=False, tokenization_mode="standard") -> None:
+                augment=False, tokenization_mode="standard", tokenizer=None) -> None:
        super().__init__(teacher_forcing_perc, augment)
        self.reduce_ratio = reduce_ratio
        self.tokenization_mode = tokenization_mode
-       self.x, self.y = load_from_files_list(data_path, split, tokenization_mode, reduce_ratio=reduce_ratio)
+       self.x, self.y = load_from_files_list(data_path, split, tokenization_mode, reduce_ratio=reduce_ratio, tokenizer=tokenizer)
        
     def __getitem__(self, index):
        
@@ -263,12 +278,21 @@ class PretrainingDataset(LightningDataModule):
         self.batch_size = config.data.batch_size
         self.num_workers = config.data.num_workers
         self.tokenization_mode = config.data.tokenization_mode
+        self.reduce_ratio = config.data.reduce_ratio
 
-        self.train_dataset = SyntheticOMRDataset(data_path=self.data_path, split="train", augment=True, tokenization_mode=self.tokenization_mode)
-        self.val_dataset = SyntheticOMRDataset(data_path=self.data_path, split="val", dataset_length=1000, augment=False, tokenization_mode=self.tokenization_mode)
-        self.test_dataset = SyntheticOMRDataset(data_path=self.data_path, split="test", dataset_length=1000, augment=False, tokenization_mode=self.tokenization_mode)
-        w2i, i2w = check_and_retrieveVocabulary([self.train_dataset.get_gt(), self.val_dataset.get_gt(), self.test_dataset.get_gt()], "vocab/", f"{self.vocab_name}")#
-    
+        if self.tokenization_mode != 'abc':
+            self.train_dataset = SyntheticOMRDataset(data_path=self.data_path, split="train", augment=True, tokenization_mode=self.tokenization_mode)
+            self.val_dataset = SyntheticOMRDataset(data_path=self.data_path, split="val", dataset_length=1000, augment=False, tokenization_mode=self.tokenization_mode)
+            self.test_dataset = SyntheticOMRDataset(data_path=self.data_path, split="test", dataset_length=1000, augment=False, tokenization_mode=self.tokenization_mode)
+            w2i, i2w = check_and_retrieveVocabulary([self.train_dataset.get_gt(), self.val_dataset.get_gt(), self.test_dataset.get_gt()], "vocab/", f"{self.vocab_name}")#
+        else:
+            tokenizer = Tokenizer.from_file(config.data.tokenizer_path)
+            self.train_dataset = RealDataset(data_path=self.data_path, split="train", reduce_ratio=self.reduce_ratio, tokenizer=tokenizer, tokenization_mode=self.tokenization_mode)
+            self.val_dataset = RealDataset(data_path=self.data_path, split="val", reduce_ratio=self.reduce_ratio, tokenizer=tokenizer, tokenization_mode=self.tokenization_mode)
+            self.test_dataset = RealDataset(data_path=self.data_path, split="test", reduce_ratio=self.reduce_ratio, tokenizer=tokenizer, tokenization_mode=self.tokenization_mode)
+            w2i = {w : tokenizer.token_to_id(w) for w in tokenizer.get_vocab()}
+            i2w = {w2i[w] : w for w in w2i}
+
         self.train_dataset.set_dictionaries(w2i, i2w)
         self.val_dataset.set_dictionaries(w2i, i2w)
         self.test_dataset.set_dictionaries(w2i, i2w)

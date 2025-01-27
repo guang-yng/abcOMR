@@ -7,7 +7,7 @@ import random
 from datasets import load_dataset
 
 from PIL import Image, ImageOps
-from wand.image import Image as IMG
+# from wand.image import Image as IMG
 
 import numpy as np
 import xml.etree.ElementTree as ET
@@ -129,7 +129,7 @@ class VerovioGenerator():
         return pngfile
     
     def inkify_image(self, sample):
-        image = IMG.from_array(np.array(sample))
+#        image = IMG.from_array(np.array(sample))
         paint = rfloat(0, 1)
         image.oil_paint(paint)
         

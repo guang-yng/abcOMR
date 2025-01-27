@@ -8,3 +8,5 @@ __pycache__
 *.pt
 *.out
 *.sh
+
+wandb

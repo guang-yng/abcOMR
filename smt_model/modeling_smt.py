@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 from torch.nn.init import xavier_uniform_
-from transformers import ConvNextConfig, ConvNextModel, PreTrainedModel
+from transformers import ConvNextConfig, ConvNextModel, PreTrainedModel, GenerationMixin
 from transformers.modeling_outputs import CausalLMOutputWithCrossAttentions
 
 from .configuration_smt import SMTConfig
@@ -392,17 +392,48 @@ class SMTModelForCausalLM(PreTrainedModel):
         
     
     def predict(self, input, convert_to_str=False):
-        predicted_sequence = torch.from_numpy(np.asarray([self.w2i['<bos>']])).to(input.device).unsqueeze(0)
         encoder_output = self.forward_encoder(input)
-        text_sequence = []
-        for i in range(self.maxlen - predicted_sequence.shape[-1]):
+        text_sequences = [[] for _ in range(len(input))]
+        bos_token = self.w2i['<bos>'] if '<bos>' in self.w2i else self.w2i['<|begin_of_abc|>']
+        predicted_sequence = torch.from_numpy(np.asarray([[bos_token] for _ in range(len(input))])).to(input.device)
+        prediction_done = [False for _ in range(len(input))]
+        ids = torch.tensor([i for i in range(len(input))], dtype=torch.int).to(input.device)
+        for i in range(self.maxlen - 1):
             predictions = self.forward_decoder(encoder_output, predicted_sequence.long())
-            predicted_token = torch.argmax(predictions.logits[:, :, -1]).item()
-            predicted_sequence = torch.cat([predicted_sequence, torch.argmax(predictions.logits[:, :, -1], dim=1, keepdim=True)], dim=1)
-            if convert_to_str:
-                predicted_token = f"{predicted_token}"
-            if self.i2w[predicted_token] == '<eos>':
+            predicted_token = torch.argmax(predictions.logits[:, :, -1], dim=1, keepdim=True)
+            predicted_sequence = torch.cat([predicted_sequence, predicted_token], dim=1)
+            to_keep = []
+            for j, idx, tokens in zip(range(len(ids)), ids, predicted_token):
+                if self.i2w[tokens.squeeze().item()] in ['<eos>', '<|end_of_abc|>']:
+                    prediction_done[idx] = True
+                    text_sequences[idx] = [self.i2w[token.item()] for token in predicted_sequence[j]]
+                else:
+                    to_keep.append(j)
+            if len(to_keep) == 0:
                 break
-            text_sequence.append(self.i2w[predicted_token])
+            ids = ids[to_keep]
+            predicted_sequence = predicted_sequence[to_keep]
+            encoder_output = encoder_output[to_keep]
+            
+        for idx, tokens in zip(ids, predicted_sequence):
+            prediction_done[idx] = True
+            text_sequences[idx] = [self.i2w[token.item()] for token in predicted_sequence[j]]
         
-        return text_sequence, predictions
+        assert all(prediction_done), "Prediction error..."
+
+        # for j in range(len(input)):
+        #     bos_token = self.w2i['<bos>'] if '<bos>' in self.w2i else self.w2i['<|begin_of_abc|>']
+        #     predicted_sequence = torch.from_numpy(np.asarray([bos_token])).to(input.device).unsqueeze(0)
+        #     text_sequence = []
+        #     for i in range(self.maxlen - predicted_sequence.shape[-1]):
+        #         predictions = self.forward_decoder(encoder_output[j].unsqueeze(0), predicted_sequence.long())
+        #         predicted_token = torch.argmax(predictions.logits[:, :, -1]).item()
+        #         predicted_sequence = torch.cat([predicted_sequence, torch.argmax(predictions.logits[:, :, -1], dim=1, keepdim=True)], dim=1)
+        #         if convert_to_str:
+        #             predicted_token = f"{predicted_token}"
+        #         if self.i2w[predicted_token] in ['<eos>', '<|end_of_abc|>']:
+        #             break
+        #         text_sequence.append(self.i2w[predicted_token])
+        #     text_sequences.append(text_sequence)
+        
+        return text_sequences, None
