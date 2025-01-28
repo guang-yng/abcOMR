@@ -92,7 +92,7 @@ class MHA(nn.Module):
         k = torch.reshape(k, (source_len, b*self.num_heads, self.head_dim)).transpose(0, 1)
         v = torch.reshape(v, (source_len, b*self.num_heads, self.head_dim)).transpose(0, 1)
         
-        attn_output_weigths = torch.bmm(q, k.transpose(1,2))
+        attn_output_weigths = torch.bmm(q, k.transpose(1,2)) * self.scale_factor
         
         if attn_mask is not None:
             attn_mask = attn_mask.unsqueeze(0)

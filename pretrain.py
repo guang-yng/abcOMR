@@ -34,11 +34,11 @@ def main(config:ExperimentConfig):
                                   padding_token=pad_token, in_channels=1, w2i=data.train_dataset.w2i, i2w=data.train_dataset.i2w, 
                                   d_model=256, dim_ff=256, num_dec_layers=8)
     
-    wandb_logger = WandbLogger(project='SMTABC', group=f"musescoreabc-314", name=f"SMTABC", log_model=False)
+    wandb_logger = WandbLogger(project='SMTABC', group=f"musescoreabc-314", name=f"SMTABC-3lr", log_model=False)
 
     early_stopping = EarlyStopping(monitor="val_SER", min_delta=0.01, patience=5, mode="min", verbose=True)
     
-    checkpointer = ModelCheckpoint(dirpath=f"weights/pretraining/", filename=f"SMTABC", 
+    checkpointer = ModelCheckpoint(dirpath=f"weights/pretraining/", filename=f"SMTABC-sqrtd-scheduler-3lr", 
                                    monitor="val_SER", mode='min',
                                    save_top_k=3, verbose=True)
     

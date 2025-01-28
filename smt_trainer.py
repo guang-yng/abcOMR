@@ -4,7 +4,7 @@ import random
 import numpy as np
 import torch.nn as nn
 import lightning.pytorch as L
-from transformers import GenerationConfig
+from transformers import GenerationConfig, get_linear_schedule_with_warmup
 
 from torchinfo import summary
 from eval_functions import compute_poliphony_metrics_abc
@@ -36,7 +36,20 @@ class SMTPP_Trainer(L.LightningModule):
         self.save_hyperparameters()
     
     def configure_optimizers(self):
-        return torch.optim.AdamW(list(self.model.encoder.parameters()) + list(self.model.decoder.parameters()), lr=1e-4, amsgrad=False, weight_decay=1e-5)
+        optimizer = torch.optim.AdamW(list(self.model.encoder.parameters()) + list(self.model.decoder.parameters()), lr=3e-4, amsgrad=False, weight_decay=1e-5)
+        scheduler = get_linear_schedule_with_warmup(
+            optimizer,
+            num_warmup_steps=31000,
+            num_training_steps=620000
+        )
+        return {
+            'optimizer': optimizer,
+            'lr_scheduler': {
+                'scheduler': scheduler,
+                'interval': 'step',
+                'frequency': 1
+            }
+        }
     
     def forward(self, input, last_preds) -> Any:
         return self.model(input, last_preds)
